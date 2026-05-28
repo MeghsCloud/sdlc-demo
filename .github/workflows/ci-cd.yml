@@ -50,7 +50,6 @@ jobs:
       - name: Run Peer Review Agent
         run: |
           python agents/peer-review-agent.py
-        continue-on-error: true
 
       # ---------------------------
       # 6. Trivy Filesystem Scan
@@ -60,9 +59,13 @@ jobs:
         with:
           scan-type: "fs"
           scan-ref: "."
-          format: "table"
+          format: "json"
+          output: "trivy-fs.json"
           severity: "CRITICAL,HIGH"
-        continue-on-error: true
+
+      - name: Run Trivy Agent
+        run: |
+          python agents/trivy-agent.py trivy-fs.json
 
       # ---------------------------
       # 7. Checkov IaC Scan
@@ -71,7 +74,13 @@ jobs:
         uses: bridgecrewio/checkov-action@master
         with:
           directory: .
+          output_format: json
+          output_file_path: checkov.json
           soft_fail: true
+
+      - name: Run Checkov Agent
+        run: |
+          python agents/checkov-agent.py checkov.json
 
       # ---------------------------
       # 8. OPA Policy Check
@@ -86,8 +95,11 @@ jobs:
 
       - name: OPA Policy Check
         run: |
-          opa eval --format pretty \
+          opa eval --format json \
             --data policies/ \
             --input k8s/deployment.yml \
-            "data.kubernetes.deny"
-        continue-on-error: true
+            "data.kubernetes.deny" > opa.json
+
+      - name: Run OPA Agent
+        run: |
+          python agents/opa-agent.py opa.json
