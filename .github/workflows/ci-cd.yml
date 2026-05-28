@@ -75,8 +75,15 @@ jobs:
         with:
           directory: .
           output_format: json
-          output_file_path: checkov.json
+          output_file_path: checkov-results
           soft_fail: true
+
+      - name: Move Checkov results
+        run: |
+          if [ -f checkov-results/results_json.json ]; then
+            mv checkov-results/results_json.json checkov.json
+            rm -rf checkov-results
+          fi
 
       - name: Run Checkov Agent
         run: |
