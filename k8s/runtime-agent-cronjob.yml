@@ -22,11 +22,18 @@ spec:
                 - /bin/sh
                 - -c
                 - |
-                  pip install -q kubernetes
-                  python /scripts/runtime-agent.py sdlc-demo default --alert
+                  pip install -q --target /tmp/pip kubernetes
+                  PYTHONPATH=/tmp/pip python /scripts/runtime-agent.py sdlc-demo default --alert
+              securityContext:
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
               volumeMounts:
                 - name: agent-scripts
                   mountPath: /scripts
+                - name: tmp
+                  mountPath: /tmp
               resources:
                 requests:
                   cpu: 100m
@@ -38,6 +45,8 @@ spec:
             - name: agent-scripts
               configMap:
                 name: runtime-agent-scripts
+            - name: tmp
+              emptyDir: {}
 ---
 apiVersion: v1
 kind: ServiceAccount
