@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# TypeScript compiled output
+*.js
+*.d.ts
+*.js.map
+!jest.config.js
+
+# CDK
+cdk.out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# Test/scan outputs
+trivy*.json
+checkov*.json
+opa.json
+sbom.json
+checkov-results/
