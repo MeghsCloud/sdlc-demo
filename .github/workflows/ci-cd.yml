@@ -1,0 +1,41 @@
+name: SDLC Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-test-scan:
+
+    runs-on: self-hosted   # EKS runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest
+
+      # ---- SONAR PLACEHOLDER ----
+      - name: Sonar Scan
+        run: echo "Sonar scan step"
+
+      # ---- TRIVY ----
+      - name: Trivy Scan (filesystem)
+        run: echo "trivy fs ."
+
+      # ---- CHECKOV ----
+      - name: Checkov Scan
+        run: echo "checkov -d ."
+
+      # ---- OPA ----
+      - name: OPA Policy Check
+        run: echo "opa eval policies/"

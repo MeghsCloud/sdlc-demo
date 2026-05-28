@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sdlc-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sdlc-demo
+  template:
+    metadata:
+      labels:
+        app: sdlc-demo
+    spec:
+      containers:
+        - name: sdlc-demo
+          image: <ECR_IMAGE>:latest
+          ports:
+            - containerPort: 8080
