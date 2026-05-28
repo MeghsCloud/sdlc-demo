@@ -1,0 +1,59 @@
+---
+# 1. Namespace for the runner system
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: actions-runner-system
+---
+# 2. Kubernetes Secret holding the GitHub PAT
+# The token MUST have these permissions:
+#   - repo (Full control of private repositories)
+#   - admin:org (if registering org-level runners)
+#   - workflow (optional, for workflow dispatch)
+#
+# Create this secret manually before applying:
+#   kubectl create secret generic controller-manager \
+#     --namespace=actions-runner-system \
+#     --from-literal=github_token=<YOUR_PAT_WITH_REQUIRED_PERMISSIONS>
+apiVersion: v1
+kind: Secret
+metadata:
+  name: controller-manager
+  namespace: actions-runner-system
+type: Opaque
+stringData:
+  github_token: REPLACE_WITH_YOUR_GITHUB_PAT
+---
+# 3. RunnerDeployment - self-hosted runners for the repo
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: RunnerDeployment
+metadata:
+  name: eks-github-runner
+  namespace: actions-runner-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: eks-github-runner
+  template:
+    metadata:
+      labels:
+        app: eks-github-runner
+    spec:
+      repository: meghscloud/sdlc-demo
+      labels:
+        - eks
+        - self-hosted
+        - sdlc-runner
+      # Explicitly reference the secret containing the GitHub token
+      # This is what allows the controller to register runners
+      env:
+        - name: RUNNER_FEATURE_FLAG_ONCE
+          value: "true"
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
