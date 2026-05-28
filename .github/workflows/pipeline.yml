@@ -107,8 +107,8 @@ jobs:
       - name: Move Checkov results
         run: |
           if [ -f checkov-results/results_json.json ]; then
-            mv checkov-results/results_json.json checkov.json
-            rm -rf checkov-results
+            sudo cp checkov-results/results_json.json checkov.json
+            sudo rm -rf checkov-results
           fi
 
       - name: Checkov Agent
