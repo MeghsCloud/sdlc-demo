@@ -125,9 +125,10 @@ jobs:
 
       - name: OPA Policy Check
         run: |
+          python -c "import yaml, json, sys; print(json.dumps(yaml.safe_load(open('k8s/deployment.yml'))))" > /tmp/deployment.json
           opa eval --format json \
             --data policies/ \
-            --input k8s/deployment.yml \
+            --input /tmp/deployment.json \
             "data.kubernetes.deny" > opa.json
 
       - name: OPA Agent
