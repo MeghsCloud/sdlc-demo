@@ -1,17 +1,16 @@
-FROM python:3.12-slim
+FROM node:20
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package*.json ./
+RUN npm install
 
 COPY . .
 
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app
-
+RUN useradd -m appuser
 USER appuser
 
-EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
-CMD ["python", "app/app.py"]
+CMD ["node", "index.js"]
