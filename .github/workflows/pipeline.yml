@@ -21,6 +21,10 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - name: Clean workspace
+        run: |
+          sudo rm -rf checkov.json checkov-results || true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -51,6 +55,11 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - name: Clean workspace
+        run: |
+          sudo rm -rf checkov.json checkov-results trivy-fs.json trivy-deps.json opa.json sbom.json || true
+          sudo chown -R $(id -u):$(id -g) ${{ github.workspace }} || true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
