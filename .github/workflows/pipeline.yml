@@ -1,0 +1,248 @@
+name: "SDLC Pipeline"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: sdlc-demo
+  EKS_CLUSTER: EksCluster
+  NAMESPACE: default
+
+jobs:
+  # ============================================
+  # STAGE 1: Build & Test
+  # ============================================
+  build-test:
+    runs-on: [self-hosted, eks]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Peer Review Agent
+        run: python agents/peer-review-agent.py
+
+  # ============================================
+  # STAGE 2: Security Scan
+  # ============================================
+  security-scan:
+    needs: build-test
+    runs-on: [self-hosted, eks]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # -- Trivy Filesystem Scan --
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "json"
+          output: "trivy-fs.json"
+          severity: "CRITICAL,HIGH,MEDIUM"
+
+      # -- Trivy Dependency Scan --
+      - name: Trivy Dependency Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          scanners: "vuln"
+          format: "json"
+          output: "trivy-deps.json"
+
+      # -- Trivy Agent Decision --
+      - name: Trivy Agent
+        run: python agents/trivy-agent.py trivy-fs.json trivy-deps.json
+
+      # -- Checkov IaC Scan --
+      - name: Checkov Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          output_format: json
+          output_file_path: checkov-results
+          soft_fail: true
+
+      - name: Move Checkov results
+        run: |
+          if [ -f checkov-results/results_json.json ]; then
+            mv checkov-results/results_json.json checkov.json
+            rm -rf checkov-results
+          fi
+
+      - name: Checkov Agent
+        run: python agents/checkov-agent.py checkov.json
+
+      # -- OPA Policy Check --
+      - name: Install OPA
+        run: |
+          if ! command -v opa &> /dev/null; then
+            curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+            chmod +x opa
+            sudo mv opa /usr/local/bin/
+          fi
+
+      - name: OPA Policy Check
+        run: |
+          opa eval --format json \
+            --data policies/ \
+            --input k8s/deployment.yml \
+            "data.kubernetes.deny" > opa.json
+
+      - name: OPA Agent
+        run: python agents/opa-agent.py opa.json
+
+      # -- SBOM Generation --
+      - name: Build image for SBOM
+        run: docker build -t sdlc-demo:scan .
+
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "sdlc-demo:scan"
+          format: "cyclonedx"
+          output: "sbom.json"
+
+      # -- Upload Reports --
+      - name: Upload Security Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            trivy-fs.json
+            trivy-deps.json
+            checkov.json
+            opa.json
+            sbom.json
+
+  # ============================================
+  # STAGE 3: Build & Push to ECR
+  # ============================================
+  build-push:
+    needs: security-scan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [self-hosted, eks]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: tag
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker build \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest \
+            .
+
+      - name: Push to ECR
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Set image output
+        id: image
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}" >> $GITHUB_OUTPUT
+
+  # ============================================
+  # STAGE 4: Deploy to EKS
+  # ============================================
+  deploy:
+    needs: build-push
+    runs-on: [self-hosted, eks]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # -- Pre-Deploy Agent --
+      - name: Deploy Agent (Pre-deploy)
+        run: python agents/deploy-agent.py sdlc-demo ${{ env.NAMESPACE }} --pre
+
+      # -- Deploy --
+      - name: Deploy to EKS
+        run: |
+          IMAGE="${{ needs.build-push.outputs.image }}"
+          echo "Deploying image: $IMAGE"
+          sed -i "s|<ECR_IMAGE>:latest|$IMAGE|g" k8s/deployment.yml
+          kubectl apply -f k8s/deployment.yml -n ${{ env.NAMESPACE }}
+          kubectl rollout status deployment/sdlc-demo -n ${{ env.NAMESPACE }} --timeout=180s
+
+      # -- Post-Deploy Agent --
+      - name: Deploy Agent (Post-deploy)
+        run: python agents/deploy-agent.py sdlc-demo ${{ env.NAMESPACE }} --post
+
+      # -- Rollback on Failure --
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "::warning::Deployment failed - rolling back"
+          kubectl rollout undo deployment/sdlc-demo -n ${{ env.NAMESPACE }}
+          kubectl rollout status deployment/sdlc-demo -n ${{ env.NAMESPACE }} --timeout=120s
