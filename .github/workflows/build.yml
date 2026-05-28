@@ -1,0 +1,86 @@
+name: "Phase 3: Build & Push to ECR"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - "requirements.txt"
+  workflow_run:
+    workflows: ["Phase 2: Security CI Pipeline"]
+    types: [completed]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: sdlc-demo
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-push:
+    runs-on: [self-hosted, eks]
+    # Only run if security scan passed (when triggered by workflow_run)
+    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      # ---------------------------
+      # 1. Checkout
+      # ---------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------------------------
+      # 2. Configure AWS Credentials
+      # ---------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          # Uses IAM role attached to EKS node (IRSA or instance profile)
+          # If using OIDC, uncomment below:
+          # role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+
+      # ---------------------------
+      # 3. Login to ECR
+      # ---------------------------
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ---------------------------
+      # 4. Build Docker Image
+      # ---------------------------
+      - name: Build Docker image
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          echo "Building image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
+
+      # ---------------------------
+      # 5. Push to ECR
+      # ---------------------------
+      - name: Push to ECR
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "::notice::Image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+      # ---------------------------
+      # 6. Output image URI for deploy stage
+      # ---------------------------
+      - name: Set image output
+        id: image
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    outputs:
+      image: ${{ steps.image.outputs.image }}

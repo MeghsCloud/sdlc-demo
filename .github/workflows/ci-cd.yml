@@ -1,41 +1,91 @@
-name: SDLC Pipeline
+name: "Phase 1: Build, Test & Scan"
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   build-test-scan:
-
-    runs-on: self-hosted   # EKS runner
+    runs-on: [self-hosted, eks]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
+      # ---------------------------
+      # 1. Checkout
+      # ---------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ---------------------------
+      # 2. Setup Python
+      # ---------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      # ---------------------------
+      # 3. Install Dependencies
+      # ---------------------------
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
+      # ---------------------------
+      # 4. Run Tests
+      # ---------------------------
       - name: Run tests
-        run: pytest
+        run: |
+          pytest tests/ -v --tb=short
 
-      # ---- SONAR PLACEHOLDER ----
-      - name: Sonar Scan
-        run: echo "Sonar scan step"
+      # ---------------------------
+      # 5. Peer Review Agent
+      # ---------------------------
+      - name: Run Peer Review Agent
+        run: |
+          python agents/peer-review-agent.py
+        continue-on-error: true
 
-      # ---- TRIVY ----
+      # ---------------------------
+      # 6. Trivy Filesystem Scan
+      # ---------------------------
       - name: Trivy Scan (filesystem)
-        run: echo "trivy fs ."
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+          severity: "CRITICAL,HIGH"
+        continue-on-error: true
 
-      # ---- CHECKOV ----
+      # ---------------------------
+      # 7. Checkov IaC Scan
+      # ---------------------------
       - name: Checkov Scan
-        run: echo "checkov -d ."
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          soft_fail: true
 
-      # ---- OPA ----
+      # ---------------------------
+      # 8. OPA Policy Check
+      # ---------------------------
+      - name: Install OPA
+        run: |
+          if ! command -v opa &> /dev/null; then
+            curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+            chmod +x opa
+            sudo mv opa /usr/local/bin/
+          fi
+
       - name: OPA Policy Check
-        run: echo "opa eval policies/"
+        run: |
+          opa eval --format pretty \
+            --data policies/ \
+            --input k8s/deployment.yml \
+            "data.kubernetes.deny"
+        continue-on-error: true
